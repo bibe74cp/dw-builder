@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DwBuilder.Api/DwBuilder.Api.csproj" />
+    <Project Path="src/DwBuilder.Biml/DwBuilder.Biml.csproj" />
+    <Project Path="src/DwBuilder.Core/DwBuilder.Core.csproj" />
+    <Project Path="src/DwBuilder.Infrastructure/DwBuilder.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DwBuilder.Core.Tests/DwBuilder.Core.Tests.csproj" />
+    <Project Path="tests/DwBuilder.Infrastructure.Tests/DwBuilder.Infrastructure.Tests.csproj" />
+  </Folder>
+</Solution>
