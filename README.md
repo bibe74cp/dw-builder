@@ -24,3 +24,7 @@ Data warehouse builder
 ### web-developer — 2026-05-16
 - **Area:** Full-stack — DwBuilder.Api / DwBuilder.Core / DwBuilder.Infrastructure / DwBuilder.Biml / DwBuilder.Web
 - **Azione:** Agente creato. Copre l'intero stack applicativo di DW-Builder: API REST ASP.NET Core 10, componenti React 18/TypeScript/Ant Design, integrazione BIML, autenticazione JWT, test xUnit. Applica OWASP Top 10 in autonomia. Delega DDL e operazioni DB a `db-developer`, backlog a `ProjectManager`. Documenta le scelte architetturali in `Documentation-web.md`.
+
+### orchestrator — 2026-05-16
+- **Area:** Coordinamento tecnico / gestione ciclo di sviluppo
+- **Azione:** Agente creato. Coordina l'intero ciclo di sviluppo di DW-Builder orchestrando i subagenti ProjectManager, db-developer e web-developer. Segue un flusso deterministico in 5 step (intake → decomposizione → assegnazione → tracciamento → chiusura). Supporta fan-out/fan-in, saga, circuit breaker, retry con escalation. Invocabile direttamente dall'utente con una descrizione di feature o milestone.
