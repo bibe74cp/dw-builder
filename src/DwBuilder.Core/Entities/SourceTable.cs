@@ -27,6 +27,19 @@ public class SourceTable
     
     public DateTimeOffset UpdatedAt { get; set; }
     
+    // Scheduling configuration (FASE 7)
+    public bool ScheduleEnabled { get; set; } = false;
+    
+    public string? ScheduleType { get; set; }
+    
+    public int? ScheduleFrequency { get; set; }
+    
+    public TimeSpan? ScheduleTime { get; set; }
+    
+    public string? ScheduleDaysOfWeek { get; set; }
+    
+    public string? ScheduleDescription { get; set; }
+    
     // Navigation properties
     public Source Source { get; set; } = null!;
     

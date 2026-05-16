@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <location path="." inheritInChildApplications="false">
+    <system.webServer>
+      <handlers>
+        <add name="aspNetCore" path="*" verb="*" modules="AspNetCoreModuleV2" resourceType="Unspecified" />
+      </handlers>
+      <aspNetCore 
+        processPath="dotnet" 
+        arguments=".\DwBuilder.Api.dll" 
+        stdoutLogEnabled="true" 
+        stdoutLogFile=".\logs\stdout" 
+        hostingModel="inprocess">
+        <environmentVariables>
+          <!-- Override these with actual production values -->
+          <environmentVariable name="ASPNETCORE_ENVIRONMENT" value="Production" />
+          
+          <!-- Database connection string -->
+          <!-- <environmentVariable name="DB_CONNECTION_STRING" value="Server=...;Database=DwBuilderDW;..." /> -->
+          
+          <!-- JWT configuration -->
+          <!-- <environmentVariable name="JWT_KEY" value="__YOUR_JWT_SECRET_KEY__" /> -->
+          <!-- <environmentVariable name="JWT_ISSUER" value="https://dwbuilder.yourdomain.com" /> -->
+          <!-- <environmentVariable name="JWT_AUDIENCE" value="https://dwbuilder.yourdomain.com" /> -->
+          
+          <!-- Encryption key -->
+          <!-- <environmentVariable name="ENCRYPTION_KEY" value="__YOUR_ENCRYPTION_KEY__" /> -->
+          
+          <!-- CORS allowed origins -->
+          <!-- <environmentVariable name="ALLOWED_CORS_ORIGINS" value="https://dwbuilder.yourdomain.com" /> -->
+        </environmentVariables>
+      </aspNetCore>
+    </system.webServer>
+  </location>
+  
+  <system.webServer>
+    <security>
+      <requestFiltering>
+        <!-- Limit request size to 50MB -->
+        <requestLimits maxAllowedContentLength="52428800" />
+      </requestFiltering>
+    </security>
+    
+    <!-- Enable compression -->
+    <urlCompression doStaticCompression="true" doDynamicCompression="true" />
+    
+    <!-- Custom error pages (optional) -->
+    <httpErrors errorMode="Detailed" />
+    
+    <!-- Security headers -->
+    <httpProtocol>
+      <customHeaders>
+        <add name="X-Content-Type-Options" value="nosniff" />
+        <add name="X-Frame-Options" value="DENY" />
+        <add name="X-XSS-Protection" value="1; mode=block" />
+        <add name="Referrer-Policy" value="strict-origin-when-cross-origin" />
+      </customHeaders>
+    </httpProtocol>
+    
+    <!-- Redirect HTTP to HTTPS -->
+    <rewrite>
+      <rules>
+        <rule name="HTTPS Redirect" stopProcessing="true">
+          <match url="(.*)" />
+          <conditions>
+            <add input="{HTTPS}" pattern="^OFF$" />
+          </conditions>
+          <action type="Redirect" url="https://{HTTP_HOST}/{R:1}" redirectType="Permanent" />
+        </rule>
+      </rules>
+    </rewrite>
+  </system.webServer>
+</configuration>

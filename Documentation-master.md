@@ -1076,19 +1076,387 @@ WHERE Id = ?;  -- parametro passato dal pacchetto
 
 ---
 
-### 8.7 Schedulazione con SQL Server Agent
+### 8.7 Schedulazione con SQL Server Agent (FASE 7)
 
-Un **SQL Server Agent Job** per ogni sorgente esegue in sequenza tutti i pacchetti delle tabelle di quella sorgente.
+**DW-Builder** automatizza la schedulazione dei pacchetti SSIS tramite **SQL Server Agent jobs**, con configurazione parametrizzata via metadati `_meta.SourceTables` e logging avanzato in `_meta.Logs`.
 
-**Esempio Job "Sync ERP":**
+---
+
+#### 8.7.1 Architettura Schedulazione
+
 ```
-Step 1: Execute Package [ERP_Customers.dtsx]
-Step 2: Execute Package [ERP_Orders.dtsx]
-Step 3: Execute Package [ERP_Products.dtsx]
-...
+┌────────────────────────────────────────────────────────────────┐
+│  _meta.SourceTables                                            │
+│  ┌───────────────────────────────────────────────────────────┐ │
+│  │ ScheduleEnabled  = 1 (bit)                                │ │
+│  │ ScheduleType     = 'Daily' | 'Weekly' | 'Monthly' | ...   │ │
+│  │ ScheduleTime     = '02:00:00' (time)                      │ │
+│  │ ScheduleDaysOfWeek = 'Monday,Wednesday,Friday'            │ │
+│  │ ScheduleFrequency = 1 (int)                               │ │
+│  └───────────────────────────────────────────────────────────┘ │
+└──────────────────────────┬─────────────────────────────────────┘
+                           │
+                           ▼
+┌────────────────────────────────────────────────────────────────┐
+│  CreateJobsForSource.sql (DDL Script)                          │
+│                                                                │
+│  Legge _meta.SourceTables con ScheduleEnabled = 1             │
+│  Crea SQL Server Agent Job per ogni tabella:                  │
+│    - Nome: DwBuilder_Source{n}_Table{n}_{TableName}           │
+│    - Step: Esegue pacchetto SSIS da SSISDB Catalog           │
+│    - Schedule: Basato su ScheduleType/Time/DaysOfWeek        │
+└──────────────────────────┬─────────────────────────────────────┘
+                           │
+                           ▼
+┌────────────────────────────────────────────────────────────────┐
+│  SQL Server Agent (msdb)                                       │
+│  Jobs eseguono pacchetti SSIS su schedule configurata         │
+└──────────────────────────┬─────────────────────────────────────┘
+                           │
+                           ▼
+┌────────────────────────────────────────────────────────────────┐
+│  SSIS Package Execution (SSISDB Catalog)                       │
+│  Esegue ETL: Source → Staging → MERGE → Landing               │
+└──────────────────────────┬─────────────────────────────────────┘
+                           │
+                           ▼
+┌────────────────────────────────────────────────────────────────┐
+│  _meta.Logs (Enhanced Logging)                                 │
+│  ┌───────────────────────────────────────────────────────────┐ │
+│  │ JobName, PackageName                                      │ │
+│  │ RowsInserted, RowsUpdated, RowsDeleted                    │ │
+│  │ ExecutionDurationMs                                        │ │
+│  │ ErrorDetails (se fallito)                                  │ │
+│  └───────────────────────────────────────────────────────────┘ │
+└────────────────────────────────────────────────────────────────┘
 ```
 
-**Configurazione schedulazione:** cron expression configurabile tramite interfaccia Web App (FASE 7).
+---
+
+#### 8.7.2 Configurazione Scheduling in _meta.SourceTables
+
+La tabella `_meta.SourceTables` è stata estesa con le seguenti colonne:
+
+| Colonna | Tipo | Descrizione |
+|---|---|---|
+| `ScheduleEnabled` | `BIT` | Se `1`, il job viene creato e schedulato |
+| `ScheduleType` | `NVARCHAR(20)` | Tipo di schedule: `Daily`, `Weekly`, `Monthly`, `OnDemand` |
+| `ScheduleTime` | `TIME` | Ora di esecuzione giornaliera (es. `02:00:00`) |
+| `ScheduleFrequency` | `INT` | Frequenza: ogni N giorni (Daily), giorno del mese (Monthly) |
+| `ScheduleDaysOfWeek` | `NVARCHAR(50)` | Giorni settimana per schedule Weekly (es. `Monday,Wednesday,Friday`) |
+| `ScheduleDescription` | `NVARCHAR(500)` | Descrizione human-readable della schedule |
+
+**Esempio configurazione:**
+
+```sql
+-- Daily sync alle 2 AM
+UPDATE _meta.SourceTables
+SET 
+    ScheduleEnabled = 1,
+    ScheduleType = 'Daily',
+    ScheduleTime = '02:00:00',
+    ScheduleFrequency = 1, -- Ogni 1 giorno
+    ScheduleDescription = 'Daily customer sync at 2 AM'
+WHERE SourceId = 1 AND TableName = 'Customers';
+
+-- Weekly sync Lunedì/Mercoledì/Venerdì alle 18:00
+UPDATE _meta.SourceTables
+SET 
+    ScheduleEnabled = 1,
+    ScheduleType = 'Weekly',
+    ScheduleTime = '18:00:00',
+    ScheduleDaysOfWeek = 'Monday,Wednesday,Friday',
+    ScheduleDescription = 'Weekly orders sync MWF at 6 PM'
+WHERE SourceId = 1 AND TableName = 'Orders';
+
+-- OnDemand (solo esecuzione manuale)
+UPDATE _meta.SourceTables
+SET 
+    ScheduleEnabled = 1,
+    ScheduleType = 'OnDemand',
+    ScheduleDescription = 'Manual execution only'
+WHERE SourceId = 1 AND TableName = 'ProductCatalog';
+```
+
+---
+
+#### 8.7.3 Creazione SQL Server Agent Jobs
+
+Lo script `database/SqlAgent/CreateJobsForSource.sql` crea automaticamente i jobs per una sorgente specificata.
+
+**Esecuzione:**
+
+```sql
+USE DwBuilderDW;
+
+-- Impostare parametri
+DECLARE @SourceId INT = 1; -- ID della sorgente
+DECLARE @SsisCatalogFolder NVARCHAR(200) = N'DwBuilder'; -- Folder SSISDB
+
+-- Eseguire lo script
+:r database\SqlAgent\CreateJobsForSource.sql
+```
+
+**Lo script esegue:**
+
+1. Legge tutte le `SourceTables` con `SourceId = @SourceId` e `ScheduleEnabled = 1`
+2. Per ogni tabella:
+   - Crea job con naming: `DwBuilder_Source{SourceId}_Table{TableId}_{TableName}`
+   - Configura job step che esegue pacchetto SSIS da SSISDB tramite `catalog.create_execution`
+   - Configura schedule basato su `ScheduleType`, `ScheduleTime`, `ScheduleDaysOfWeek`
+   - Configura logging tramite chiamata a `[_meta].[usp_LogJobExecution]` dopo esecuzione
+3. Jobs creati in stato **enabled** (esecuzione automatica attiva)
+
+**Job Step Command (generato automaticamente):**
+
+```sql
+-- Step: Execute SSIS Package
+DECLARE @execution_id BIGINT;
+
+EXEC [SSISDB].[catalog].[create_execution]
+    @package_name = N'Customers.dtsx',
+    @folder_name = N'DwBuilder',
+    @project_name = N'ERP',
+    @use32bitruntime = 0,
+    @execution_id = @execution_id OUTPUT;
+
+EXEC [SSISDB].[catalog].[start_execution] @execution_id;
+
+-- Polling per completamento
+WHILE 1=1
+BEGIN
+    SELECT @status = [status] 
+    FROM [SSISDB].[catalog].[executions]
+    WHERE execution_id = @execution_id;
+    
+    IF @status IN (4, 7) -- Succeeded / Stopped
+        BREAK;
+    ELSE IF @status IN (5, 6) -- Failed / Cancelled
+        RAISERROR('Package execution failed.', 16, 1);
+    
+    WAITFOR DELAY '00:00:05'; -- Poll ogni 5 secondi
+END
+
+-- Log risultato
+EXEC [_meta].[usp_LogJobExecution]
+    @JobName = N'DwBuilder_Source1_Table5_Customers',
+    @PackageName = N'Customers.dtsx',
+    @Status = 'Success',
+    @DurationMs = <durata_calcolata>;
+```
+
+---
+
+#### 8.7.4 Enhanced Logging (_meta.Logs)
+
+La tabella `_meta.Logs` è stata estesa per tracciare esecuzioni SQL Agent:
+
+| Colonna Aggiunta | Tipo | Descrizione |
+|---|---|---|
+| `JobName` | `NVARCHAR(200)` | Nome SQL Server Agent job |
+| `JobExecutionId` | `UNIQUEIDENTIFIER` | ID univoco esecuzione (correlazione con msdb) |
+| `PackageName` | `NVARCHAR(200)` | Nome pacchetto SSIS eseguito |
+| `RowsInserted` | `INT` | Numero righe inserite |
+| `RowsUpdated` | `INT` | Numero righe aggiornate |
+| `RowsDeleted` | `INT` | Numero righe soft-deleted |
+| `ExecutionDurationMs` | `INT` | Durata esecuzione in millisecondi |
+| `ErrorDetails` | `NVARCHAR(MAX)` | Dettaglio errore se fallito |
+
+**Stored Procedure: [_meta].[usp_LogJobExecution]**
+
+```sql
+EXEC [_meta].[usp_LogJobExecution]
+    @JobName = N'DwBuilder_Source1_Table1_Customers',
+    @PackageName = N'Customers.dtsx',
+    @Status = 'Success',
+    @RowsInserted = 150,
+    @RowsUpdated = 25,
+    @RowsDeleted = 3,
+    @DurationMs = 12350,
+    @ErrorDetails = NULL;
+```
+
+Questa stored procedure:
+- Inserisce record in `_meta.Logs`
+- Imposta `Level` = `Information` per successo, `Error` per fallimento
+- Genera `JobExecutionId` univoco per correlazione
+- Costruisce messaggio di log strutturato con metriche
+
+---
+
+#### 8.7.5 Monitoring Job Execution
+
+**Query Recent Job Executions:**
+
+```sql
+-- Ultimi 50 job eseguiti con metriche
+SELECT TOP 50
+    Timestamp,
+    Level,
+    JobName,
+    PackageName,
+    RowsInserted,
+    RowsUpdated,
+    RowsDeleted,
+    ExecutionDurationMs,
+    CASE WHEN Level = 'Error' THEN ErrorDetails ELSE NULL END AS ErrorDetails
+FROM [_meta].[Logs]
+WHERE JobName IS NOT NULL
+ORDER BY Timestamp DESC;
+```
+
+**Query Performance Summary (Last 7 Days):**
+
+```sql
+SELECT 
+    j.name AS JobName,
+    COUNT(*) AS Executions,
+    SUM(CASE WHEN h.run_status = 1 THEN 1 ELSE 0 END) AS Successes,
+    SUM(CASE WHEN h.run_status = 0 THEN 1 ELSE 0 END) AS Failures,
+    AVG(l.ExecutionDurationMs) / 1000.0 AS AvgDurationSeconds,
+    AVG(l.RowsInserted + l.RowsUpdated + l.RowsDeleted) AS AvgRowsProcessed
+FROM msdb.dbo.sysjobs j
+INNER JOIN msdb.dbo.sysjobhistory h ON j.job_id = h.job_id
+LEFT JOIN [_meta].[Logs] l 
+    ON l.JobName = j.name
+    AND ABS(DATEDIFF(SECOND, msdb.dbo.agent_datetime(h.run_date, h.run_time), l.Timestamp)) < 60
+WHERE j.name LIKE 'DwBuilder_%'
+  AND h.step_id = 0
+  AND msdb.dbo.agent_datetime(h.run_date, h.run_time) >= DATEADD(DAY, -7, GETDATE())
+GROUP BY j.name
+ORDER BY Failures DESC, AvgDurationSeconds DESC;
+```
+
+---
+
+#### 8.7.6 Deployment Options
+
+**Opzione 1: SSISDB Catalog Deployment (Consigliata)**
+
+- Pacchetti deployati in `SSISDB/DwBuilder/{SourceName}/{TableName}.dtsx`
+- Gestione centralizzata, logging integrato, environment variables
+- Job step usa `catalog.create_execution` e `catalog.start_execution`
+
+**Opzione 2: File System Deployment**
+
+- Pacchetti salvati in `C:\SSIS\DwBuilder\{SourceName}\{TableName}.dtsx`
+- Job step usa `dtexec` tramite `xp_cmdshell`
+- Richiede configurazione permessi file system
+
+**La documentazione e gli script forniti supportano SSISDB Catalog deployment.**
+
+---
+
+#### 8.7.7 Maintenance Operations
+
+**Disable Jobs Temporarily (Maintenance Window):**
+
+```sql
+DECLARE @JobName NVARCHAR(200);
+
+DECLARE job_cursor CURSOR FOR
+SELECT name FROM msdb.dbo.sysjobs WHERE name LIKE 'DwBuilder_%';
+
+OPEN job_cursor;
+FETCH NEXT FROM job_cursor INTO @JobName;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    EXEC msdb.dbo.sp_update_job @job_name = @JobName, @enabled = 0;
+    FETCH NEXT FROM job_cursor INTO @JobName;
+END
+
+CLOSE job_cursor;
+DEALLOCATE job_cursor;
+```
+
+**Re-enable After Maintenance:**
+
+```sql
+-- Stesso pattern con @enabled = 1
+```
+
+**Update Schedule:**
+
+```sql
+-- Modificare configurazione in _meta.SourceTables
+UPDATE _meta.SourceTables
+SET ScheduleTime = '03:00:00'
+WHERE SourceId = 1 AND TableName = 'Customers';
+
+-- Ri-eseguire CreateJobsForSource.sql (idempotente: drop + recreate)
+```
+
+---
+
+#### 8.7.8 Troubleshooting
+
+| Problema | Soluzione |
+|---|---|
+| **Jobs non creati** | Verificare SQL Server Agent running: `EXEC xp_servicecontrol 'QueryState', N'SQLServerAGENT';` |
+| **Job fallisce: "Package not found"** | Verificare deploy pacchetti in SSISDB: `SELECT * FROM SSISDB.catalog.packages;` |
+| **Schedule non triggerata** | Verificare job e schedule enabled in `msdb.dbo.sysjobs` e `msdb.dbo.sysschedules` |
+| **Logs non popolati** | Verificare `usp_LogJobExecution` esista e sia chiamata nello step del job |
+
+**Diagnostic Query:**
+
+```sql
+-- Verifica stato SQL Server Agent
+EXEC xp_servicecontrol 'QueryState', N'SQLServerAGENT';
+
+-- Verifica SSISDB
+SELECT name FROM sys.databases WHERE name = 'SSISDB';
+
+-- Verifica pacchetti deployati
+SELECT f.name AS Folder, p.name AS Project, pkg.name AS Package
+FROM SSISDB.catalog.folders f
+INNER JOIN SSISDB.catalog.projects p ON f.folder_id = p.folder_id
+INNER JOIN SSISDB.catalog.packages pkg ON p.project_id = pkg.project_id
+WHERE f.name = 'DwBuilder';
+```
+
+---
+
+#### 8.7.9 Alerting (Email Notifications)
+
+**Setup Database Mail:**
+
+```sql
+-- Enable Database Mail
+EXEC sp_configure 'Database Mail XPs', 1;
+RECONFIGURE;
+
+-- Configurare mail profile in SSMS:
+-- Management > Database Mail > Configure Database Mail
+```
+
+**Create SQL Agent Operator:**
+
+```sql
+EXEC msdb.dbo.sp_add_operator
+    @name = N'DwBuilderAdmin',
+    @enabled = 1,
+    @email_address = N'dwbuilder-admin@company.com';
+```
+
+**Configure Job Failure Notification:**
+
+```sql
+EXEC msdb.dbo.sp_update_job
+    @job_name = N'DwBuilder_Source1_Table1_Customers',
+    @notify_level_email = 2, -- 0=Never, 1=Success, 2=Failure, 3=Always
+    @notify_email_operator_name = N'DwBuilderAdmin';
+```
+
+---
+
+#### 8.7.10 Riferimenti
+
+- **Script DDL:** `database/SqlAgent/CreateJobsForSource.sql`
+- **Stored Procedure:** `database/SqlAgent/usp_LogJobExecution.sql`
+- **Test Scenarios:** `database/SqlAgent/TestScenarios/README.md`
+- **Setup Guide:** `database/SqlAgent/README.md`
+- **Microsoft Docs:** [SQL Server Agent](https://learn.microsoft.com/en-us/sql/ssms/agent/sql-server-agent)
 
 ---
 

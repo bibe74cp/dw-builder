@@ -1,0 +1,9 @@
+**/.vs
+**/.git
+**/bin
+**/obj
+**/node_modules
+**/*.user
+**/*.log
+.env
+.env.docker

@@ -1,0 +1,284 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Biml xmlns="http://schemas.varigence.com/biml.xsd">
+
+  <Connections>
+    <OleDbConnection Name="DW" ConnectionString="Server=localhost;Database=DwBuilderDW;Integrated Security=True;TrustServerCertificate=True;" />
+    <OleDbConnection Name="Source_ERP" ConnectionString="Server=ERPSERVER;Database=ErpDB;User Id=erp_user;Password=***;TrustServerCertificate=True;" />
+    <OleDbConnection Name="Source_CRM" ConnectionString="Server=CRMSERVER;Database=CrmDB;Integrated Security=True;TrustServerCertificate=True;" />
+  </Connections>
+
+  <Packages>
+
+    <Package Name="ETL_ERP_Customers">
+      <Tasks>
+        <ExecuteSQL Name="TRUNCATE Staging" ConnectionName="DW">
+          <DirectInput><![CDATA[
+            TRUNCATE TABLE [erp].[stg_Customers]
+          ]]></DirectInput>
+        </ExecuteSQL>
+
+        <Dataflow Name="Load erp.Customers">
+          <Transformations>
+            <OleDbSource Name="Source" ConnectionName="Source_ERP">
+              <DirectInput><![CDATA[
+                SELECT [CustomerId], [CustomerCode], [CustomerName], [Email], [CreatedDate]
+                FROM [dbo].[Customers]
+              ]]></DirectInput>
+            </OleDbSource>
+
+            <ScriptComponentTransformation Name="Calculate ChangeHashKey" ProjectCoreName="SC_a1b2c3d4e5f6">
+              <Inputs>
+                <Input Name="Input0">
+                  <Columns>
+                    <Column SourceColumn="CustomerId" TargetColumn="CustomerId" DataType="Int32" />
+                    <Column SourceColumn="CustomerCode" TargetColumn="CustomerCode" DataType="String" Length="20" />
+                    <Column SourceColumn="CustomerName" TargetColumn="CustomerName" DataType="String" Length="100" />
+                    <Column SourceColumn="Email" TargetColumn="Email" DataType="String" Length="100" />
+                    <Column SourceColumn="CreatedDate" TargetColumn="CreatedDate" DataType="DateTime" />
+                  </Columns>
+                </Input>
+              </Inputs>
+              <Outputs>
+                <Output Name="Output0">
+                  <Columns>
+                    <Column Name="CustomerId" DataType="Int32" />
+                    <Column Name="CustomerCode" DataType="String" Length="20" />
+                    <Column Name="CustomerName" DataType="String" Length="100" />
+                    <Column Name="Email" DataType="String" Length="100" />
+                    <Column Name="CreatedDate" DataType="DateTime" />
+                    <Column Name="ChangeHashKey" DataType="String" Length="64" />
+                  </Columns>
+                </Output>
+              </Outputs>
+              <Code><![CDATA[
+using System;
+using System.Security.Cryptography;
+using System.Text;
+
+public override void Input0_ProcessInputRow(Input0Buffer Row)
+{
+    var parts = new string[] {
+        Row.CustomerName_IsNull ? "NULL" : Row.CustomerName.ToString(),
+        Row.Email_IsNull ? "NULL" : Row.Email.ToString(),
+        Row.CreatedDate_IsNull ? "NULL" : Row.CreatedDate.ToString()
+    };
+
+    var raw = string.Join("|", parts);
+    var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(raw));
+    Row.ChangeHashKey = Convert.ToHexString(bytes).ToLowerInvariant();
+
+    Row.CustomerId = Row.Input0_CustomerId;
+    Row.CustomerId_IsNull = Row.Input0_CustomerId_IsNull;
+    Row.CustomerCode = Row.Input0_CustomerCode;
+    Row.CustomerCode_IsNull = Row.Input0_CustomerCode_IsNull;
+    Row.CustomerName = Row.Input0_CustomerName;
+    Row.CustomerName_IsNull = Row.Input0_CustomerName_IsNull;
+    Row.Email = Row.Input0_Email;
+    Row.Email_IsNull = Row.Input0_Email_IsNull;
+    Row.CreatedDate = Row.Input0_CreatedDate;
+    Row.CreatedDate_IsNull = Row.Input0_CreatedDate_IsNull;
+}
+              ]]></Code>
+            </ScriptComponentTransformation>
+
+            <OleDbDestination Name="Staging" ConnectionName="DW">
+              <ExternalTableOutput Table="[erp].[stg_Customers]" />
+            </OleDbDestination>
+          </Transformations>
+        </Dataflow>
+
+        <ExecuteSQL Name="MERGE Staging to Landing" ConnectionName="DW">
+          <DirectInput><![CDATA[
+            MERGE [erp].[Customers] AS tgt
+            USING [erp].[stg_Customers] AS src
+              ON tgt.[CustomerId] = src.[CustomerId] AND tgt.[CustomerCode] = src.[CustomerCode]
+            WHEN MATCHED AND tgt.ChangeHashKey <> src.ChangeHashKey THEN
+                UPDATE SET
+                    tgt.ChangeHashKey  = src.ChangeHashKey,
+                    tgt.UpdateDatetime = GETUTCDATE(),
+                    tgt.IsDeleted      = 0,
+                    tgt.[CustomerName] = src.[CustomerName],
+                    tgt.[Email] = src.[Email],
+                    tgt.[CreatedDate] = src.[CreatedDate]
+            WHEN NOT MATCHED BY TARGET THEN
+                INSERT ([ChangeHashKey], [InsertDatetime], [UpdateDatetime], [IsDeleted], [CustomerId], [CustomerCode], [CustomerName], [Email], [CreatedDate])
+                VALUES (src.ChangeHashKey, GETUTCDATE(), GETUTCDATE(), 0, src.[CustomerId], src.[CustomerCode], src.[CustomerName], src.[Email], src.[CreatedDate])
+            WHEN NOT MATCHED BY SOURCE AND tgt.IsDeleted = 0 THEN
+                UPDATE SET
+                    tgt.IsDeleted      = 1,
+                    tgt.UpdateDatetime = GETUTCDATE();
+          ]]></DirectInput>
+        </ExecuteSQL>
+
+        <ExecuteSQL Name="Update Sync Status" ConnectionName="DW">
+          <DirectInput><![CDATA[
+            UPDATE _meta.SourceTables
+            SET LastSyncAt = GETUTCDATE(),
+                LastSyncStatus = 'Success',
+                LastSyncMessage = NULL
+            WHERE Id = 123
+          ]]></DirectInput>
+        </ExecuteSQL>
+      </Tasks>
+      <EventHandlers>
+        <EventHandler EventName="OnError">
+          <Tasks>
+            <ExecuteSQL Name="Update Sync Error" ConnectionName="DW">
+              <DirectInput><![CDATA[
+                UPDATE _meta.SourceTables
+                SET LastSyncAt = GETUTCDATE(),
+                    LastSyncStatus = 'Error',
+                    LastSyncMessage = 'SSIS package execution failed'
+                WHERE Id = 123
+              ]]></DirectInput>
+            </ExecuteSQL>
+          </Tasks>
+        </EventHandler>
+      </EventHandlers>
+    </Package>
+
+    <Package Name="ETL_ERP_Orders">
+      <Tasks>
+        <ExecuteSQL Name="TRUNCATE Staging" ConnectionName="DW">
+          <DirectInput><![CDATA[
+            TRUNCATE TABLE [erp].[stg_Orders]
+          ]]></DirectInput>
+        </ExecuteSQL>
+
+        <Dataflow Name="Load erp.Orders">
+          <Transformations>
+            <OleDbSource Name="Source" ConnectionName="Source_ERP">
+              <DirectInput><![CDATA[
+                SELECT [OrderId], [OrderNumber], [CustomerId], [OrderDate], [TotalAmount]
+                FROM [dbo].[Orders]
+              ]]></DirectInput>
+            </OleDbSource>
+
+            <ScriptComponentTransformation Name="Calculate ChangeHashKey" ProjectCoreName="SC_b2c3d4e5f6a7">
+              <Inputs>
+                <Input Name="Input0">
+                  <Columns>
+                    <Column SourceColumn="OrderId" TargetColumn="OrderId" DataType="Int32" />
+                    <Column SourceColumn="OrderNumber" TargetColumn="OrderNumber" DataType="String" Length="50" />
+                    <Column SourceColumn="CustomerId" TargetColumn="CustomerId" DataType="Int32" />
+                    <Column SourceColumn="OrderDate" TargetColumn="OrderDate" DataType="DateTime" />
+                    <Column SourceColumn="TotalAmount" TargetColumn="TotalAmount" DataType="Decimal" />
+                  </Columns>
+                </Input>
+              </Inputs>
+              <Outputs>
+                <Output Name="Output0">
+                  <Columns>
+                    <Column Name="OrderId" DataType="Int32" />
+                    <Column Name="OrderNumber" DataType="String" Length="50" />
+                    <Column Name="CustomerId" DataType="Int32" />
+                    <Column Name="OrderDate" DataType="DateTime" />
+                    <Column Name="TotalAmount" DataType="Decimal" />
+                    <Column Name="ChangeHashKey" DataType="String" Length="64" />
+                  </Columns>
+                </Output>
+              </Outputs>
+              <Code><![CDATA[
+using System;
+using System.Security.Cryptography;
+using System.Text;
+
+public override void Input0_ProcessInputRow(Input0Buffer Row)
+{
+    var parts = new string[] {
+        Row.CustomerId_IsNull ? "NULL" : Row.CustomerId.ToString(),
+        Row.OrderDate_IsNull ? "NULL" : Row.OrderDate.ToString(),
+        Row.TotalAmount_IsNull ? "NULL" : Row.TotalAmount.ToString()
+    };
+
+    var raw = string.Join("|", parts);
+    var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(raw));
+    Row.ChangeHashKey = Convert.ToHexString(bytes).ToLowerInvariant();
+
+    Row.OrderId = Row.Input0_OrderId;
+    Row.OrderId_IsNull = Row.Input0_OrderId_IsNull;
+    Row.OrderNumber = Row.Input0_OrderNumber;
+    Row.OrderNumber_IsNull = Row.Input0_OrderNumber_IsNull;
+    Row.CustomerId = Row.Input0_CustomerId;
+    Row.CustomerId_IsNull = Row.Input0_CustomerId_IsNull;
+    Row.OrderDate = Row.Input0_OrderDate;
+    Row.OrderDate_IsNull = Row.Input0_OrderDate_IsNull;
+    Row.TotalAmount = Row.Input0_TotalAmount;
+    Row.TotalAmount_IsNull = Row.Input0_TotalAmount_IsNull;
+}
+              ]]></Code>
+            </ScriptComponentTransformation>
+
+            <OleDbDestination Name="Staging" ConnectionName="DW">
+              <ExternalTableOutput Table="[erp].[stg_Orders]" />
+            </OleDbDestination>
+          </Transformations>
+        </Dataflow>
+
+        <ExecuteSQL Name="MERGE Staging to Landing" ConnectionName="DW">
+          <DirectInput><![CDATA[
+            MERGE [erp].[Orders] AS tgt
+            USING [erp].[stg_Orders] AS src
+              ON tgt.[OrderId] = src.[OrderId] AND tgt.[OrderNumber] = src.[OrderNumber]
+            WHEN MATCHED AND tgt.ChangeHashKey <> src.ChangeHashKey THEN
+                UPDATE SET
+                    tgt.ChangeHashKey  = src.ChangeHashKey,
+                    tgt.UpdateDatetime = GETUTCDATE(),
+                    tgt.IsDeleted      = 0,
+                    tgt.[CustomerId] = src.[CustomerId],
+                    tgt.[OrderDate] = src.[OrderDate],
+                    tgt.[TotalAmount] = src.[TotalAmount]
+            WHEN NOT MATCHED BY TARGET THEN
+                INSERT ([ChangeHashKey], [InsertDatetime], [UpdateDatetime], [IsDeleted], [OrderId], [OrderNumber], [CustomerId], [OrderDate], [TotalAmount])
+                VALUES (src.ChangeHashKey, GETUTCDATE(), GETUTCDATE(), 0, src.[OrderId], src.[OrderNumber], src.[CustomerId], src.[OrderDate], src.[TotalAmount])
+            WHEN NOT MATCHED BY SOURCE AND tgt.IsDeleted = 0 THEN
+                UPDATE SET
+                    tgt.IsDeleted      = 1,
+                    tgt.UpdateDatetime = GETUTCDATE();
+          ]]></DirectInput>
+        </ExecuteSQL>
+
+        <ExecuteSQL Name="Update Sync Status" ConnectionName="DW">
+          <DirectInput><![CDATA[
+            UPDATE _meta.SourceTables
+            SET LastSyncAt = GETUTCDATE(),
+                LastSyncStatus = 'Success',
+                LastSyncMessage = NULL
+            WHERE Id = 124
+          ]]></DirectInput>
+        </ExecuteSQL>
+      </Tasks>
+      <EventHandlers>
+        <EventHandler EventName="OnError">
+          <Tasks>
+            <ExecuteSQL Name="Update Sync Error" ConnectionName="DW">
+              <DirectInput><![CDATA[
+                UPDATE _meta.SourceTables
+                SET LastSyncAt = GETUTCDATE(),
+                    LastSyncStatus = 'Error',
+                    LastSyncMessage = 'SSIS package execution failed'
+                WHERE Id = 124
+              ]]></DirectInput>
+            </ExecuteSQL>
+          </Tasks>
+        </EventHandler>
+      </EventHandlers>
+    </Package>
+
+    <Package Name="Master_ERP">
+      <Tasks>
+        <ExecutePackage Name="Execute Customers">
+          <ExternalProjectPackage Package="ETL_ERP_Customers" />
+        </ExecutePackage>
+        <ExecutePackage Name="Execute Orders">
+          <ExternalProjectPackage Package="ETL_ERP_Orders" />
+        </ExecutePackage>
+      </Tasks>
+      <PrecedenceConstraints>
+        <PrecedenceConstraint From="Execute Customers" To="Execute Orders" />
+      </PrecedenceConstraints>
+    </Package>
+
+  </Packages>
+
+</Biml>

@@ -12,6 +12,7 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore" Version="10.0.8" />
     <PackageReference Include="Microsoft.OpenApi" Version="2.4.1" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.1.7" />
   </ItemGroup>
@@ -19,6 +20,7 @@
   <ItemGroup>
     <ProjectReference Include="..\DwBuilder.Core\DwBuilder.Core.csproj" />
     <ProjectReference Include="..\DwBuilder.Infrastructure\DwBuilder.Infrastructure.csproj" />
+    <ProjectReference Include="..\DwBuilder.Biml\DwBuilder.Biml.csproj" />
   </ItemGroup>
 
 </Project>

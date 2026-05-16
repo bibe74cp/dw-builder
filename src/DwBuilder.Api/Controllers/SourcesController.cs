@@ -1,4 +1,5 @@
 using DwBuilder.Core.DTOs.Sources;
+using DwBuilder.Core.DTOs.SourceSchema;
 using DwBuilder.Core.Entities;
 using DwBuilder.Core.Interfaces;
 using Microsoft.AspNetCore.Authorization;
@@ -13,15 +14,18 @@ public class SourcesController : ControllerBase
 {
     private readonly ISourceRepository _sourceRepository;
     private readonly IEncryptionService _encryptionService;
+    private readonly ISourceConnectionService _sourceConnectionService;
     private readonly ILogger<SourcesController> _logger;
 
     public SourcesController(
         ISourceRepository sourceRepository,
         IEncryptionService encryptionService,
+        ISourceConnectionService sourceConnectionService,
         ILogger<SourcesController> logger)
     {
         _sourceRepository = sourceRepository;
         _encryptionService = encryptionService;
+        _sourceConnectionService = sourceConnectionService;
         _logger = logger;
     }
 
@@ -112,6 +116,59 @@ public class SourcesController : ControllerBase
 
         _logger.LogInformation("Soft-deleted source {SourceId}", id);
         return NoContent();
+    }
+
+    /// <summary>
+    /// Tests the connection to a source database.
+    /// </summary>
+    [HttpPost("{id:int}/test-connection")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> TestConnection(int id, CancellationToken cancellationToken)
+    {
+        var source = await _sourceRepository.GetByIdAsync(id, cancellationToken);
+        if (source is null || !source.IsActive)
+            return NotFound();
+
+        try
+        {
+            await _sourceConnectionService.TestConnectionAsync(source, cancellationToken);
+            _logger.LogInformation("Connection test successful for source {SourceId}", id);
+            return Ok(new { success = true, message = "Connection successful" });
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning(ex, "Connection test failed for source {SourceId}", id);
+            return BadRequest(new { success = false, message = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Gets available tables from the source database.
+    /// </summary>
+    [HttpGet("{id:int}/available-tables")]
+    [ProducesResponseType(typeof(IEnumerable<SourceTableInfo>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<IEnumerable<SourceTableInfo>>> GetAvailableTables(
+        int id, 
+        CancellationToken cancellationToken)
+    {
+        var source = await _sourceRepository.GetByIdAsync(id, cancellationToken);
+        if (source is null || !source.IsActive)
+            return NotFound();
+
+        try
+        {
+            var tables = await _sourceConnectionService.GetAvailableTablesAsync(source, cancellationToken);
+            return Ok(tables);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogError(ex, "Failed to retrieve tables from source {SourceId}", id);
+            return BadRequest(new { success = false, message = ex.Message });
+        }
     }
 
     private static SourceDto ToDto(Source source) => new()
