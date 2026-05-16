@@ -10,7 +10,254 @@ Registro delle decisioni architetturali, funzionali e tecniche del layer applica
 2. [FASE 2: Connettività Sorgenti](#fase-2-connettività-sorgenti)
 3. [FASE 3: Generazione DDL](#fase-3-generazione-ddl)
 4. [FASE 4: Generatore BIML](#fase-4-generatore-biml)
-5. [FASE 8: Testing, Security, Production Config, Packaging](#fase-8-testing-security-production-config-packaging)
+5. [FASE 6: Frontend React Web Application](#fase-6-frontend-react-web-application)
+6. [FASE 8: Testing, Security, Production Config, Packaging](#fase-8-testing-security-production-config-packaging)
+
+---
+
+## FASE 6: Frontend React Web Application — 16 maggio 2026
+
+### Contesto
+Il backend API REST ASP.NET Core 10 è completo (63 endpoint documentati in Swagger) e funzionante. Serve un'interfaccia utente web completa per permettere a data engineer e amministratori di sistema di configurare il Data Warehouse senza scrivere codice SQL o modificare file di configurazione manualmente.
+
+L'applicazione web deve supportare:
+- Autenticazione JWT con protezione route
+- CRUD sorgenti con test connessione
+- Selezione tabelle sorgente e configurazione nomi landing table
+- Configurazione campi con marcatura business key
+- Preview e applicazione DDL al Data Warehouse
+- Download template BIML per generazione pacchetti SSIS
+
+### Decisione
+Implementato il progetto **`DwBuilder.Web`** come Single Page Application (SPA) React 18 con TypeScript, Ant Design 5, e TanStack Query per state management.
+
+**Stack tecnologico:**
+- **React 18** — framework UI con Hooks, Strict Mode
+- **TypeScript** — type safety, strict mode abilitato
+- **Vite** — build tool moderno (ESbuild transpiler, HMR, tree shaking)
+- **Ant Design 5** — UI component library enterprise-grade (Table, Form, Modal, Menu, Layout)
+- **React Router 6** — routing client-side con protected routes
+- **TanStack Query (React Query)** — caching API, automatic refetching, optimistic updates
+- **Axios** — HTTP client con interceptors per JWT
+- **Italian locale** — `antd/locale/it_IT` per UI localizzata
+
+### Architettura Frontend
+
+**Struttura progetto:**
+
+```
+src/DwBuilder.Web/
+├── src/
+│   ├── api/              # API client layer
+│   │   ├── axios.ts      # Axios instance + JWT interceptors
+│   │   └── services.ts   # API services (auth, sources, tables, fields, ddl, biml)
+│   ├── types/
+│   │   └── api.ts        # TypeScript interfaces per DTOs backend
+│   ├── layouts/
+│   │   └── MainLayout.tsx # Layout con sidebar, header, content
+│   ├── pages/            # Pagine applicazione
+│   │   ├── Login.tsx
+│   │   ├── Dashboard.tsx
+│   │   ├── Sources.tsx   # CRUD sorgenti
+│   │   ├── Tables.tsx    # Selezione tabelle
+│   │   ├── Fields.tsx    # Configurazione campi
+│   │   ├── Ddl.tsx       # Preview/Apply DDL
+│   │   └── Settings.tsx
+│   ├── components/
+│   │   └── BimlDownloadButton.tsx
+│   ├── App.tsx           # Root component con routing
+│   ├── main.tsx          # Entry point
+│   └── index.css         # Global styles
+├── package.json
+├── tsconfig.json         # TypeScript strict configuration
+├── vite.config.ts        # Vite config con proxy /api
+└── .env.development      # VITE_API_BASE_URL=http://localhost:5000/api/v1
+```
+
+### Componenti implementati
+
+#### API Client Layer
+- **`axios.ts`** — Axios instance configurata:
+  - `baseURL: import.meta.env.VITE_API_BASE_URL`
+  - Request interceptor: aggiunge `Authorization: Bearer {token}` a ogni richiesta se JWT presente in `localStorage`
+  - Response interceptor: su 401 Unauthorized pulisce token e redirige a `/login`
+  
+- **`services.ts`** — Wrapper API services:
+  - `authService` — `login()`, `register()`
+  - `sourceService` — CRUD + `testConnection()`, `getAvailableTables()`
+  - `sourceTableService` — `getBySourceId()`, `bulkUpsert()`, `getAvailableFields()`, `getFields()`, `bulkUpsertFields()`
+  - `ddlService` — `generate()`, `apply()`
+  - `bimlService` — `download()`
+
+#### Types Layer
+- **`api.ts`** — 20+ TypeScript interfaces che mappano i DTOs backend:
+  - `LoginRequest`, `LoginResponse`
+  - `Source`, `SourceCreateDto`, `SourceUpdateDto`, `TestConnectionResponse`
+  - `SourceTable`, `SourceTableUpsertDto`, `AvailableTable`
+  - `SourceField`, `SourceFieldUpsertDto`, `AvailableField`
+  - `DdlResult`, `ApplyDdlRequest`, `ApplyDdlResponse`
+
+#### Layout
+- **`MainLayout.tsx`** — Layout applicazione:
+  - Ant Design `<Layout>` con `Sider` collapsible + `Header` + `Content`
+  - Menu sidebar con 3 voci: Dashboard, Sorgenti, Impostazioni
+  - Header con titolo app + dropdown utente con logout
+  - `<Outlet />` per rendering child routes
+
+#### Pages
+
+**Login.tsx** — Pagina autenticazione:
+- Form Ant Design con validazione `username` e `password` required
+- Chiamata `authService.login()` → salva token JWT in `localStorage`
+- Redirect a `/` (Dashboard) su login success
+- Background gradient per effetto visivo professionale
+
+**Dashboard.tsx** — Homepage applicazione:
+- 4 Card con statistiche (Ant Design `<Statistic>`):
+  - Sorgenti totali
+  - Sorgenti attive (count con filtro `isActive`)
+  - Sorgenti disattivate
+  - Ultima sincronizzazione (placeholder)
+- Tabella riepilogativa sorgenti configurate con colonne: Nome, Server, Database, Schema Landing, Stato (Tag green/red), Azioni
+- Button "Configura Tabelle" per navigazione rapida a `/sources/{id}/tables`
+- `BimlDownloadButton` nell'header della card
+
+**Sources.tsx** — Gestione sorgenti CRUD:
+- Tabella con tutte le sorgenti (TanStack Query caching)
+- Modal form per create/edit sorgente:
+  - Input: name, serverName, instanceName (optional), databaseName, landingSchema, connectionUser, connectionPassword
+  - Switch `isActive`
+  - Button "Testa Connessione" (disponibile solo in edit mode, chiama `POST /sources/{id}/test-connection`)
+- Button "Nuova Sorgente" → apre modal
+- Colonna Azioni: Edit (icona pencil), Delete (Popconfirm con warning)
+- `useMutation` per create/update/delete con auto-invalidation query cache
+
+**Tables.tsx** — Selezione tabelle sorgente:
+- Carica `availableTables` da sorgente tramite `GET /sources/{id}/available-tables`
+- Carica `configuredTables` esistenti tramite `GET /source-tables/sources/{sourceId}/tables`
+- Merge dei due dataset: mostra tutte le available tables con checkbox selected se già configurate
+- Colonne:
+  - Switch "Seleziona" (controlla se tabella va in bulk upsert)
+  - Schema e TableName sorgente (readonly)
+  - Input `landingTableName` (editabile, default = tableName)
+  - Switch `isActive`
+  - Button "Configura Campi" (se tabella ha già un `id`)
+- Button "Salva Configurazione" → `PUT /source-tables/sources/{sourceId}/tables` con array di `SourceTableUpsertDto`
+
+**Fields.tsx** — Configurazione campi tabella:
+- Carica `availableFields` da INFORMATION_SCHEMA tramite `GET /source-tables/{tableId}/available-fields`
+- Carica `configuredFields` esistenti tramite `GET /source-tables/{tableId}/fields`
+- Merge e render in tabella:
+  - Switch "Seleziona"
+  - `ordinalPosition` (sortable)
+  - `sourceColumnName` (readonly)
+  - Input `landingColumnName` (editabile)
+  - Tag `dataType` (readonly, colore blue)
+  - Tag `isNullable` (orange se true, green se false)
+  - Switch "Business Key" con icona chiave
+- Button "Salva Configurazione" → `PUT /source-tables/{tableId}/fields` con array di `SourceFieldUpsertDto`
+
+**Ddl.tsx** — Preview e applicazione DDL:
+- Carica DDL generato tramite `GET /ddl/sources/{sourceId}/tables/{tableId}/ddl`
+- 3 Tabs Ant Design con `<TextArea>` readonly:
+  - CREATE Landing Table
+  - CREATE Staging Table
+  - ALTER Landing Table (opzionale, solo se alterations presenti)
+- Checkbox per selezione script da applicare: `applyLanding`, `applyStaging`, `applyAlter`
+- Button "Applica DDL al DW" (danger style) → `POST /ddl/sources/{sourceId}/tables/{tableId}/apply-ddl`
+- Button "Scarica SQL" → download file `.sql` locale con tutti gli script
+- Button "Rigenera" → refetch query per aggiornare DDL
+
+**Settings.tsx** — Impostazioni sistema:
+- Form placeholder per configurazioni future:
+  - DW Connection String (TextArea)
+  - Encryption Key AES-256 (Password input)
+  - JWT Secret Key (Password input)
+  - CORS Allowed Origins (Input)
+  - Log Level (Input)
+- Button "Salva Impostazioni" → al momento mostra `message.info()` placeholder
+- Card "Informazioni Sistema" con versione, backend API URL, stack tecnologico
+
+#### Components
+
+**BimlDownloadButton.tsx** — Download BIML:
+- Button Ant Design con icona `<DownloadOutlined />`
+- Chiamata `bimlService.download()` → `GET /api/v1/biml` con `responseType: 'blob'`
+- Creazione `<a>` temporaneo con `href` blob URL e `download="MasterTemplate.biml"`
+- Cleanup blob URL dopo download
+- Loading state durante chiamata API
+
+#### Routing
+
+**App.tsx** — Routing applicazione:
+- `<BrowserRouter>` wrapper
+- `<QueryClientProvider>` per TanStack Query
+- `<ConfigProvider>` Ant Design con locale italiano + theme customization
+- Route `/login` pubblica
+- Route `/` con `<PrivateRoute>` HOC:
+  - Verifica presenza `localStorage.getItem('jwt_token')`
+  - Se presente: render `<MainLayout />` con nested routes
+  - Se assente: redirect a `/login`
+- Nested routes:
+  - `/` → Dashboard
+  - `/sources` → Sources
+  - `/sources/:sourceId/tables` → Tables
+  - `/sources/:sourceId/tables/:tableId/fields` → Fields
+  - `/sources/:sourceId/tables/:tableId/ddl` → Ddl
+  - `/settings` → Settings
+- Wildcard route `*` → redirect a `/`
+
+### Motivazione
+
+**Perché React invece di Blazor WebAssembly?**
+- React ha ecosistema più maturo per SPA enterprise (Ant Design è molto più ricco di Blazor component libraries)
+- Performance migliori: bundle React + Vite più leggero di Blazor WASM runtime (.NET runtime embedded nel browser)
+- Developer experience: HMR di Vite è istantaneo, Blazor WASM richiede rebuild più lento
+- Hiring pool: developer React/TypeScript più comuni di Blazor specialist in Italia
+
+**Perché Ant Design invece di Material-UI (MUI)?**
+- Ant Design è design system enterprise-grade con componenti più completi out-of-the-box (Table con sorting/filtering/pagination, Form con validazione complessa)
+- MUI richiede più customizzazione per raggiungere lo stesso livello di funzionalità
+- Ant Design ha theme built-in più professionale per applicazioni backoffice
+- Locale italiano già incluso senza setup aggiuntivo
+
+**Perché TanStack Query invece di Redux/Zustand?**
+- TanStack Query è specializzato per state derivato da API: caching automatico, refetch on window focus, stale time, retry logic
+- Redux/Zustand sono state managers generici, richiedono più boilerplate per gestire chiamate API async
+- Con TanStack Query non serve gestire manualmente loading/error states
+- Invalidation cache automatica dopo mutations
+
+**Perché Vite invece di Create React App (CRA)?**
+- Vite usa ESbuild (Go-based) 10-100x più veloce di Webpack (CRA)
+- HMR istantaneo anche con codebase grandi
+- Tree shaking più efficiente → bundle production più piccolo
+- CRA è deprecato dal team React (consigliato passaggio a Vite/Next.js)
+
+**Perché localStorage per JWT invece di httpOnly cookies?**
+- Alternative valutate:
+  - **httpOnly cookies** → più sicuro contro XSS, ma richiede configurazione CORS più complessa (credentials: 'include'), problemi con proxy Vite in dev
+  - **sessionStorage** → dati persi al reload tab, UX peggiore
+  - **in-memory state** → dati persi al refresh pagina
+- localStorage è pragmatico per applicazione interna: rischio XSS mitigato da:
+  - Content-Security-Policy headers (da configurare su backend)
+  - Ant Design sanitizza automaticamente input contro XSS
+  - Applicazione accessibile solo da rete aziendale (no internet pubblico)
+
+### Impatto
+- **Layer coinvolti:** nuovo progetto `DwBuilder.Web` (frontend), nessuna modifica a backend (API già completa)
+- **Dipendenze introdotte:** React 18, TypeScript 5.3, Vite 5, Ant Design 5.12, TanStack Query 5.17, Axios 1.6, React Router 6.21
+- **Breaking changes:** nessuno (frontend non tocca contratti API)
+
+### Alternative scartate
+- **Blazor Server** — richiede WebSocket persistente, problemi di scalabilità con molti utenti concorrenti
+- **Angular** — troppo opinionated, boilerplate eccessivo per applicazione CRUD
+- **Vue.js** — ecosistema component library enterprise meno maturo rispetto a React
+- **SvelteKit** — ancora troppo young per applicazioni enterprise mission-critical
+
+### Testing Strategy (da implementare in FASE 8)
+- **Unit test componenti:** React Testing Library per Login, BimlDownloadButton
+- **Integration test:** MSW (Mock Service Worker) per mock API calls
+- **E2E test:** Playwright per flussi critici (login → create source → configure tables → apply DDL)
 
 ---
 
