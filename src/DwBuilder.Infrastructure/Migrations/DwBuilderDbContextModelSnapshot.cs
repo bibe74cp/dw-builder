@@ -31,7 +31,19 @@ namespace DwBuilder.Infrastructure.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
 
+                    b.Property<string>("ErrorDetails")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<string>("Exception")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int?>("ExecutionDurationMs")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("JobExecutionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("JobName")
                         .HasColumnType("nvarchar(max)");
 
                     b.Property<string>("Level")
@@ -43,8 +55,20 @@ namespace DwBuilder.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<string>("PackageName")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<string>("Properties")
                         .HasColumnType("nvarchar(max)");
+
+                    b.Property<int?>("RowsDeleted")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("RowsInserted")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("RowsUpdated")
+                        .HasColumnType("int");
 
                     b.Property<DateTimeOffset>("Timestamp")
                         .HasColumnType("datetimeoffset");
@@ -205,6 +229,24 @@ namespace DwBuilder.Infrastructure.Migrations
                     b.Property<string>("LastSyncStatus")
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("ScheduleDaysOfWeek")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("ScheduleDescription")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<bool>("ScheduleEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<int?>("ScheduleFrequency")
+                        .HasColumnType("int");
+
+                    b.Property<TimeSpan?>("ScheduleTime")
+                        .HasColumnType("time");
+
+                    b.Property<string>("ScheduleType")
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<string>("SchemaName")
                         .IsRequired()
