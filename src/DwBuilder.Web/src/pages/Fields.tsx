@@ -4,7 +4,7 @@ import { SaveOutlined, ReloadOutlined, ArrowLeftOutlined, KeyOutlined } from '@a
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { sourceTableService } from '@/api/services';
 import { useParams, useNavigate } from 'react-router-dom';
-import type { AvailableField, SourceField, SourceFieldUpsertDto } from '@/types/api';
+import type { AvailableField, SourceFieldUpsertDto } from '@/types/api';
 import type { ColumnsType } from 'antd/es/table';
 
 interface FieldRow extends AvailableField {

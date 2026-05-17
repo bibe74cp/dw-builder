@@ -4,7 +4,7 @@ import { SaveOutlined, ReloadOutlined, ArrowLeftOutlined } from '@ant-design/ico
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { sourceService, sourceTableService } from '@/api/services';
 import { useParams, useNavigate } from 'react-router-dom';
-import type { AvailableTable, SourceTable, SourceTableUpsertDto } from '@/types/api';
+import type { AvailableTable, SourceTableUpsertDto } from '@/types/api';
 import type { ColumnsType } from 'antd/es/table';
 
 interface TableRow extends AvailableTable {
