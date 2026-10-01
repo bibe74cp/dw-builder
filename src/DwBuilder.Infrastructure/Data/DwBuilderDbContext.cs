@@ -57,16 +57,20 @@ public class DwBuilderDbContext : IdentityDbContext<IdentityUser>
         
         foreach (var entry in entries)
         {
-            if (entry.State == EntityState.Added)
+            // Check if the entity has CreatedAt and UpdatedAt properties
+            var createdAtProperty = entry.Metadata.FindProperty("CreatedAt");
+            var updatedAtProperty = entry.Metadata.FindProperty("UpdatedAt");
+            
+            if (entry.State == EntityState.Added && createdAtProperty != null)
             {
-                if (entry.Property("CreatedAt").CurrentValue == null || 
-                    (DateTimeOffset)entry.Property("CreatedAt").CurrentValue == default)
+                var currentValue = entry.Property("CreatedAt").CurrentValue;
+                if (currentValue == null || (DateTimeOffset)currentValue == default)
                 {
                     entry.Property("CreatedAt").CurrentValue = now;
                 }
             }
             
-            if (entry.Property("UpdatedAt") != null)
+            if (updatedAtProperty != null)
             {
                 entry.Property("UpdatedAt").CurrentValue = now;
             }
